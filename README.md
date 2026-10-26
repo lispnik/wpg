@@ -122,7 +122,7 @@ tests/data/imagemagick-input.wpg: WPG version 2.0
 **Output (SVG and PNG)** covers everything decoded above, including:
 - compound polygons, drawn as one even-odd path;
 - nested group transforms;
-- two-color gradients;
+- linear, radial and square gradients;
 - tiled textures;
 - dashed lines;
 - text with its size, color and rotation;
@@ -130,8 +130,7 @@ tests/data/imagemagick-input.wpg: WPG version 2.0
 
 **Not drawn:**
 - fill patterns, which are drawn solid;
-- gradients with more than two colors, drawn in their first color;
-- text paths and object images.
+- text paths and object images. No text path has turned up in any of the files tested.
 
 Typefaces are approximated by generic families.
 
@@ -147,10 +146,11 @@ There is no public specification. This follows [libwpg](https://sourceforge.net/
 
 ### Where output differs from libwpg
 
-Checked against LibreOffice (which uses libwpg) on about 7,900 files:
+Checked against LibreOffice (which uses libwpg) on about 18,000 files:
 - 4,596 clip-art files from the Corel WordPerfect 7 for Unix CD;
 - 1,019 WPG1 files from DrawPerfect and WordPerfect 5.1 clip-art disks;
-- 1,325 files from the WordPerfect Suite 8 and Office 2000 CDs.
+- 1,325 files from the WordPerfect Suite 8 and Office 2000 CDs;
+- 10,041 clip-art files from the WordPerfect Office 11 CDs.
 
 All but the Corel 7 files are on the Internet Archive.
 
@@ -169,13 +169,15 @@ Corrections to the layout libwpg reads:
 ### Guesses
 
 These follow the most plausible reading but are unconfirmed:
-- **Dash lengths** follow libwpg: a pen style value V is about 1.19 × V pen widths long.
+- **Dash lengths** are taken to be in file units, whatever the pen width. In WordPerfect Office 11's clip art, two motion trails define the same dash (275 on, 165 off, at 1000 units per inch). Read in file units, both get the quarter-inch dashes the artist evidently meant. libwpg scales by the pen width instead (about 1.19 × value × width), which makes them 18 inches long. It also reads the width before the file sets it, so LibreOffice draws one trail dotted and the other solid.
 - **WPG1 line styles** 2 and up are taken to be WPG2 pen styles 1 and up.
 - **Vertical text alignment** codes 1–3 are taken as top, middle and bottom.
 - **Gradient angles** follow libwpg: 0 runs top to bottom, larger angles turn clockwise. This matches LibreOffice on WordPerfect 8's gradient backgrounds.
+- **Gradient types.** Circle, ellipse, square and rectangle gradients spread from the brush's reference point (a fraction of the shape's box, from its top-left) to the farthest corner, with the first color at the center. Highlights on WordPerfect 8's gem shapes land at the upper left, which supports this reading. SVG approximates squares and rectangles with radial gradients.
+- **Gradients with more than two colors** get evenly spaced stops. None have turned up in any file.
 - **Texture tiles** are taken to be 96 pixels per inch.
 - **Hairlines.** Pens thinner than 1/300 inch are drawn as hairlines, as WordPerfect would have on screen.
 
 ## Tests
 
-`make test` runs about 340 checks. Most use WPG files built byte by byte in `tests/builder.lisp`, including OLE2 containers. Two real files from other projects' test suites live in `tests/data/`; see `tests/data/NOTICE` for their sources and licenses.
+`make test` runs about 360 checks. Most use WPG files built byte by byte in `tests/builder.lisp`, including OLE2 containers. Two real files from other projects' test suites live in `tests/data/`; see `tests/data/NOTICE` for their sources and licenses.

@@ -119,12 +119,12 @@
                      (rec2 #x15 (u16 #x8000) (u16 2) (mapcar #'s16 '(0 0 10 0)))
                      (rec2 #x29 (u16 0))
                      (rec2 #x15 (u16 #x8000) (u16 2) (mapcar #'s16 '(0 0 10 0))))))))
-    ;; libwpg's scale: 3.6/218 * 72 = 1.189 pen widths per unit.
-    (is (has "stroke-dasharray=\"19499.45 6539.45 2140.183 6539.45\"" svg))
-    (is (has "stroke-dasharray=\"12960 25920\"" svg))
+    ;; Lengths are in file units, whatever the pen width.
+    (is (has "stroke-dasharray=\"164 55 18 55\"" svg))
+    (is (has "stroke-dasharray=\"109 218\"" svg))
     (is (= 2 (count-matches "dasharray" svg))))
   ;; WPG1 line style 2 is taken as pen style 1.
-  (is (has "stroke-dasharray=\"25920 8679.633\""
+  (is (has "stroke-dasharray=\"218 73\""
            (wpg:svg-string (wpg:read-wpg (wpg1 (rec1 #x02 2 0 (u16 100))
                                                (rec1 #x05 (s16 0) (s16 0) (s16 9) (s16 9))))))))
 

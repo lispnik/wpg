@@ -195,9 +195,13 @@ points count, and arcs only by their end points."
 (defun opacity-of (color)
   (/ (color-alpha color) 255))
 
-;;; Dashes. Lengths follow libwpg: a table value V is V * 3.6/218 pen
-;;; widths in its units, which comes to about 1.19 * V * pen width. A
-;;; hairline pen counts as 1/96 inch wide.
+;;; Dashes. Dash and gap lengths are taken to be in file units, whatever
+;;; the pen width. The Pen Style Definitions in WordPerfect Office 11's
+;;; clip art (275 on, 165 off for a 55-unit pen at 1000 units per inch:
+;;; quarter-inch dashes on a motion trail) read naturally that way. libwpg
+;;; instead scales by the pen width (about 1.19 * V * width), which makes
+;;; those dashes 18 inches long; it hides that by reading the width before
+;;; the file sets it, so LibreOffice draws them as dots.
 
 (defparameter +default-dash-styles+
   #(()                                  ; 0: solid
@@ -214,10 +218,7 @@ points count, and arcs only by their end points."
     (and dash (every #'plusp dash) (copy-list dash))))
 
 (defun dash-lengths (rs)
-  (let ((width (if (zerop (rs-stroke-width rs))
-                   (/ (wpg-image-x-units (rs-image rs)) 96)
-                   (rs-stroke-width rs))))
-    (mapcar (lambda (v) (* v 36/2180 72 width)) (rs-dash rs))))
+  (copy-list (rs-dash rs)))
 
 (defun gradient-type-kind (type)
   "The KIND and ISOTROPIC of a WPG2 gradient type. Types, as libwpg names
