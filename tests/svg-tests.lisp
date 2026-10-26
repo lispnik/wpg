@@ -98,12 +98,13 @@
     (is (has "fill=\"#000000\" stroke=\"none\"" svg))))
 
 (test svg-two-color-gradient
+  ;; libwpg's angles: 0 runs top to bottom, 90 right to left.
   (let ((svg (wpg:svg-string
               (wpg:read-wpg
                (wpg2 (rec2 #x2f (u16 0) (u16 90) (u16 #xffff) (u16 #xffff) 0)
                      (rec2 #x31 1 (u16 2) 255 0 0 0 0 0 255 0 (u16 0))
                      (rec2 #x15 (u16 (ash 1 13)) (u16 3) (mapcar #'s16 '(0 0 1 0 1 1))))))))
-    (is (has "<linearGradient id=\"g1\" x1=\"0.5\" y1=\"0\" x2=\"0.5\" y2=\"1\"><stop offset=\"0\" stop-color=\"#0000ff\"/><stop offset=\"1\" stop-color=\"#ff0000\"/></linearGradient>" svg))
+    (is (has "<linearGradient id=\"g1\" x1=\"1\" y1=\"0.5\" x2=\"0\" y2=\"0.5\"><stop offset=\"0\" stop-color=\"#0000ff\"/><stop offset=\"1\" stop-color=\"#ff0000\"/></linearGradient>" svg))
     (is (has "fill=\"url(#g1)\"" svg))))
 
 (test svg-dashes

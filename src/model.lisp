@@ -89,6 +89,7 @@ WARNINGS lists the problems noticed while reading, as strings."
   (y-offset 0)
   (double-precision nil)
   palette
+  (container nil)
   (warnings nil))
 
 (defun wpg-image-width-inches (image)

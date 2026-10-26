@@ -60,6 +60,7 @@
    #:wpg-image-double-precision
    #:wpg-image-palette
    #:wpg-image-warnings
+   #:wpg-image-container
    #:wpg-image-width-inches
    #:wpg-image-height-inches
    #:find-records
@@ -125,6 +126,36 @@
    #:decode-wpg1-rle
    #:decode-wpg2-rle
 
+   ;; The drawing model (scene.lisp)
+   #:build-scene
+   #:scene #:scene-p #:scene-width #:scene-height #:scene-x-offset #:scene-y-offset
+   #:scene-x-units #:scene-y-units #:scene-shapes
+   #:style #:style-p #:style-fill #:style-fill-opacity #:style-fill-rule #:style-stroke
+   #:style-stroke-opacity #:style-stroke-width #:style-dash
+   #:gradient #:gradient-p #:gradient-angle #:gradient-stops #:gradient-direction
+   #:texture #:texture-p #:texture-bitmap #:texture-width #:texture-height #:texture-color
+   #:shape #:shape-p #:shape-transform #:shape-style
+   #:line-shape #:line-shape-p #:line-shape-x1 #:line-shape-y1 #:line-shape-x2 #:line-shape-y2
+   #:poly-shape #:poly-shape-p #:poly-shape-points #:poly-shape-closed
+   #:rect-shape #:rect-shape-p #:rect-shape-x #:rect-shape-y #:rect-shape-width
+   #:rect-shape-height #:rect-shape-rx #:rect-shape-ry
+   #:ellipse-shape #:ellipse-shape-p #:ellipse-shape-cx #:ellipse-shape-cy
+   #:ellipse-shape-rx #:ellipse-shape-ry
+   #:path-shape #:path-shape-p #:path-shape-commands
+   #:text-shape #:text-shape-p #:text-shape-x #:text-shape-y #:text-shape-lines
+   #:text-shape-size #:text-shape-char-width #:text-shape-angle #:text-shape-h-align
+   #:text-shape-v-align #:text-shape-color #:text-shape-font
+   #:image-shape #:image-shape-p #:image-shape-bitmap #:image-shape-x1 #:image-shape-y1
+   #:image-shape-x2 #:image-shape-y2
+   #:text-line-advance
+
+   ;; Rendering to pixels (wordperfect-graphics/raster)
+   #:render-scene
+   #:render-png
+   #:*font-files*
+   #:*max-pixels*
+
    ;; SVG export
+   #:write-scene-svg
    #:write-svg
    #:svg-string))

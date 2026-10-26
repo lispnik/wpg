@@ -3,6 +3,7 @@
 ;;;;   wordperfect-graphics        the reader: header, records, bitmaps, SVG.
 ;;;;                               No dependencies.
 ;;;;   wordperfect-graphics/png    PNG output for bitmaps (zpng).
+;;;;   wordperfect-graphics/raster render whole drawings to PNG (cl-vectors, zpb-ttf).
 ;;;;   wordperfect-graphics/tests  FiveAM suite.
 ;;;;   wordperfect-graphics/cli    the `wpg' command-line program (clingon).
 
@@ -26,7 +27,9 @@
                              (:file "records")
                              (:file "wpg1")
                              (:file "wpg2")
+                             (:file "ole")
                              (:file "read")
+                             (:file "scene")
                              (:file "svg"))))
   :in-order-to ((asdf:test-op (asdf:test-op #:wordperfect-graphics/tests))))
 
@@ -35,9 +38,16 @@
   :depends-on (#:wordperfect-graphics #:zpng)
   :components ((:module "src" :components ((:file "png")))))
 
+(asdf:defsystem #:wordperfect-graphics/raster
+  :description "Render WPG drawings to pixels and PNG, without an SVG renderer."
+  :depends-on (#:wordperfect-graphics #:wordperfect-graphics/png
+               #:cl-vectors #:cl-paths-ttf #:zpb-ttf)
+  :components ((:module "src" :components ((:file "raster")))))
+
 (asdf:defsystem #:wordperfect-graphics/tests
   :description "Tests for wordperfect-graphics."
-  :depends-on (#:wordperfect-graphics #:wordperfect-graphics/png #:fiveam)
+  :depends-on (#:wordperfect-graphics #:wordperfect-graphics/png
+               #:wordperfect-graphics/raster #:fiveam)
   :serial t
   :components ((:module "tests"
                 :serial t
@@ -50,6 +60,7 @@
                              (:file "svg-tests")
                              (:file "fixture-tests")
                              (:file "text-tests")
+                             (:file "scene-tests")
                              (:static-file "data/imagemagick-input.wpg")
                              (:static-file "data/libreoffice-wpg1.wpg"))))
   :perform (asdf:test-op (op c)
@@ -59,7 +70,8 @@
 
 (asdf:defsystem #:wordperfect-graphics/cli
   :description "The `wpg' command: inspect WPG files, extract bitmaps, convert to SVG."
-  :depends-on (#:wordperfect-graphics #:wordperfect-graphics/png #:clingon)
+  :depends-on (#:wordperfect-graphics #:wordperfect-graphics/png
+               #:wordperfect-graphics/raster #:clingon)
   :components ((:module "cli" :components ((:file "main"))))
   :build-operation "program-op"
   :build-pathname "bin/wpg"

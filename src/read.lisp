@@ -47,9 +47,19 @@ in it are not wildcards."
                     (wpg-header-file-type header)))
     header))
 
+(defun unwrap-container (octets)
+  "The WPG data in OCTETS, and the container it was found in: NIL for a
+bare WPG file, :OLE for one in the PerfectOffice_MAIN stream of an OLE2
+compound document."
+  (if (ole-file-p octets)
+      (values (or (ole-stream octets "PerfectOffice_MAIN")
+                  (format-error "an OLE2 compound document with no PerfectOffice_MAIN stream"))
+              :ole)
+      (values octets nil)))
+
 (defun read-wpg-header (source)
   "Read and check just the 16-byte header of SOURCE."
-  (parse-header (source-octets source)))
+  (parse-header (unwrap-container (source-octets source))))
 
 (defun wpg-file-p (source)
   "True if SOURCE starts with a WPG header."
@@ -163,16 +173,19 @@ in it are not wildcards."
 
 (defun read-wpg (source &key strict)
   "Read the WPG file SOURCE (a pathname, namestring, binary stream or octet
-vector) and return a WPG-IMAGE.
+vector) and return a WPG-IMAGE. A WPG inside an OLE2 compound document, as
+Corel's suites sometimes saved them, is read from its PerfectOffice_MAIN
+stream; WPG-IMAGE-CONTAINER is then :OLE, and record offsets count from
+the start of that stream.
 
 Damage after the header is tolerated by default: a record that fails to
 decode keeps its raw body and gets an ERROR, and problems are collected in
 WPG-IMAGE-WARNINGS. With STRICT true, the first problem is signalled
 instead."
-  (let* ((octets (source-octets source))
-         (header (parse-header octets))
+  (multiple-value-bind (octets container) (unwrap-container (source-octets source))
+  (let* ((header (parse-header octets))
          (version (check-header header octets))
-         (image (make-wpg-image :header header :version version))
+         (image (make-wpg-image :header header :version version :container container))
          (state (make-parse-state :image image
                                   :palette (if (= version 1)
                                                (default-wpg1-palette)
@@ -183,4 +196,4 @@ instead."
           (wpg-image-palette image) (parse-state-palette state))
     (when (and (= version 1) (zerop (wpg-image-width image)))
       (infer-size-from-bitmaps image))
-    image))
+    image)))

@@ -93,8 +93,19 @@ Returns a plist. :MATRIX is (a b c d e f), mapping (x, y) to
       (note-warning s "Start WPG gives a zero unit size; assuming 1200 per inch")
       (setf x-units 1200 y-units 1200))
     (let* ((viewport (loop repeat 4 collect (read-coord r s)))
-           (bounds (loop repeat 4 collect (read-coord r s))))
-      (destructuring-bind (x1 y1 x2 y2) bounds
+           (bounds (loop repeat 4 collect (read-coord r s)))
+           ;; Some files written by WordPerfect 8 have leftover bytes where
+           ;; the image bounds belong (unordered, far off the page); the
+           ;; viewport is the page there.
+           (page (destructuring-bind (x1 y1 x2 y2) bounds
+                   (if (and (< x1 x2) (< y1 y2)) bounds viewport))))
+      (unless (eq page bounds)
+        (note-warning s "Start WPG image bounds ~S are not a rectangle; using the viewport" bounds))
+      (when (eq page viewport)
+        (destructuring-bind (x1 y1 x2 y2) viewport
+          (unless (and (/= x1 x2) (/= y1 y2))
+            (note-warning s "Start WPG viewport ~S is empty" viewport))))
+      (destructuring-bind (x1 y1 x2 y2) page
         (setf (wpg-image-x-units image) x-units
               (wpg-image-y-units image) y-units
               (wpg-image-x-offset image) (min x1 x2)
@@ -223,6 +234,27 @@ Returns a plist. :MATRIX is (a b c d e f), mapping (x, y) to
   ;; path, drawn with this record's flags and transform.
   (list :characterization (read-characterization r)))
 
+(define-record (2 #x20 :group) (r s)
+  ;; Its EXTENSION records are its members, drawn through its transform.
+  ;; The box is the members' extent, in their own coordinates.
+  (let ((ch (read-characterization r)))
+    (list* :characterization ch
+           (when (>= (reader-remaining r) (if (double-precision-p s) 16 8))
+             (list :x1 (read-coord r s) :y1 (read-coord r s)
+                   :x2 (read-coord r s) :y2 (read-coord r s))))))
+
+(define-record (2 #x3c :texture-definition) (r s)
+  ;; A brush texture: its ID, an average color, the bitmap's original file
+  ;; name, and (as child records) the bitmap itself and its palette.
+  (let* ((id (read-u16 r))
+         (color (read-rgb r))
+         (flags (read-u8 r)))
+    (list :texture-id id :color color :flags flags
+          :file (octets-to-string (read-octets r (reader-remaining r))))))
+
+(define-record (2 #x3d :brush-texture) (r s)
+  (list :texture-id (read-u16 r)))
+
 (define-record (2 #x1b :bitmap) (r s)
   (let* ((ch (read-characterization r))
          (fields (list :x1 (read-coord r s) :y1 (read-coord r s)
@@ -332,7 +364,6 @@ Returns a plist. :MATRIX is (a b c d e f), mapping (x, y) to
   (#x12 :object-image)
   (#x1e :text-path)
   (#x1f :chart)
-  (#x20 :group)
   (#x21 :object-capsule)
   (#x22 :font-settings)
   (#x2a :pen-pattern)
@@ -342,7 +373,5 @@ Returns a plist. :MATRIX is (a b c d e f), mapping (x, y) to
   (#x39 :image-state)
   (#x3a :envelope-definition)
   (#x3b :envelope)
-  (#x3c :texture-definition)
-  (#x3d :brush-texture)
   (#x3e :texture-alignment)
   (#x3f :pen-texture))

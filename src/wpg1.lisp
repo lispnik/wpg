@@ -116,6 +116,12 @@
   (let ((reserved (read-u32 r)))
     (list :reserved reserved :points (read-points-1 r))))
 
+(define-record (1 #x1f :curved-polygon) (r s)
+  ;; Not in any published description: written by WordPerfect 8. Every one
+  ;; seen is a closed cubic Bezier path -- a count of 3n+1 points, the last
+  ;; the same as the first -- drawn filled, like a polygon.
+  (list :points (read-points-1 r)))
+
 (define-record (1 #x14 :bitmap-type-2) (r s)
   (let* ((rotation (read-u16 r))
          (x1 (read-s16 r)) (y1 (read-s16 r)) (x2 (read-s16 r)) (y2 (read-s16 r))
