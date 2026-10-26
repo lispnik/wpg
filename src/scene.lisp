@@ -15,8 +15,7 @@
 ;;;; records inside a compound polygon or the Start WPG page attributes are
 ;;;; ignored.
 ;;;;
-;;;; Not drawn: fill patterns (drawn solid), gradients with more than two
-;;;; colors (drawn with their first color), text paths and object images.
+;;;; Not drawn: fill patterns (drawn solid), text paths and object images.
 
 (in-package #:wordperfect-graphics)
 
@@ -30,11 +29,17 @@
   (shapes '()))
 
 (defstruct gradient
-  "A linear gradient across a shape's bounding box. ANGLE is the file's
-gradient angle in degrees: 0 runs the ramp from top to bottom, and larger
-angles turn it clockwise (libwpg's reading). STOPS is a list of
-(offset . color), offsets from 0 to 1, along the ramp."
-  (angle 0) (stops '()))
+  "A gradient across a shape's bounding box. STOPS is a list of
+(offset . color), offsets from 0 to 1.
+KIND is :LINEAR, :RADIAL or :SQUARE. A linear ramp runs in the direction
+ANGLE gives, in degrees: 0 from top to bottom, larger angles turning it
+clockwise (libwpg's reading). Radial and square gradients spread out from
+CENTER, a (u . v) fraction of the box measured from its top-left corner,
+to the farthest corner; offset 0 is the center. ISOTROPIC keeps circles
+round and squares square; otherwise they stretch with the box into
+ellipses and rectangles. ANGLE turns the stretched kinds."
+  (kind :linear) (angle 0) (stops '())
+  (center (cons 1/2 1/2)) (isotropic t))
 
 (defun gradient-direction (gradient)
   "The unit vector the ramp runs along, in the file's y-up space."
@@ -97,6 +102,29 @@ set, is the width each character should take."
 Y1 < Y2), mirrored and turned as the bitmap says."
   bitmap x1 y1 x2 y2)
 
+(defun shape-bounds (shape)
+  "The box around SHAPE's points in its own coordinates, as
+(values x0 y0 x1 y1), or NIL for text and images. For paths, control
+points count, and arcs only by their end points."
+  (let ((xs '()) (ys '()))
+    (flet ((add (x y) (push x xs) (push y ys)))
+      (typecase shape
+        (line-shape (add (line-shape-x1 shape) (line-shape-y1 shape))
+                    (add (line-shape-x2 shape) (line-shape-y2 shape)))
+        (poly-shape (loop for p across (poly-shape-points shape) do (add (car p) (cdr p))))
+        (rect-shape (add (rect-shape-x shape) (rect-shape-y shape))
+                    (add (+ (rect-shape-x shape) (rect-shape-width shape))
+                         (+ (rect-shape-y shape) (rect-shape-height shape))))
+        (ellipse-shape (add (- (ellipse-shape-cx shape) (ellipse-shape-rx shape))
+                            (- (ellipse-shape-cy shape) (ellipse-shape-ry shape)))
+                       (add (+ (ellipse-shape-cx shape) (ellipse-shape-rx shape))
+                            (+ (ellipse-shape-cy shape) (ellipse-shape-ry shape))))
+        (path-shape (dolist (c (path-shape-commands shape))
+                      (let ((args (if (eq (first c) :arc) (last c 2) (rest c))))
+                        (loop for (x y) on args by #'cddr do (add x y)))))))
+    (when xs
+      (values (reduce #'min xs) (reduce #'min ys) (reduce #'max xs) (reduce #'max ys)))))
+
 (defun text-line-advance (line default-size)
   "How far below the previous baseline LINE's baseline is."
   (* 1.2 (reduce #'max line :key (lambda (r) (or (getf r :size) default-size))
@@ -124,6 +152,7 @@ Y1 < Y2), mirrored and turned as the bitmap says."
   (gradient nil)
   (gradient-angle 0)
   (gradient-ref nil)
+  (gradient-center (cons 1/2 1/2))
   ;; WPG2: record -> its child records
   (children-of (constantly nil))
   ;; Dashes: a list of dash/gap lengths in pen-style units, or NIL
@@ -190,17 +219,40 @@ Y1 < Y2), mirrored and turned as the bitmap says."
                    (rs-stroke-width rs))))
     (mapcar (lambda (v) (* v 36/2180 72 width)) (rs-dash rs))))
 
+(defun gradient-type-kind (type)
+  "The KIND and ISOTROPIC of a WPG2 gradient type. Types, as libwpg names
+them: 1 linear, 2 polygonal, 3/4 concentric/convergent circles, 5/6
+ellipses, 7/8 squares, 9/10 rectangles. Polygonal is drawn linear."
+  (case type
+    ((3 4) (values :radial t))
+    ((5 6) (values :radial nil))
+    ((7 8) (values :square t))
+    ((9 10) (values :square nil))
+    (t (values :linear t))))
+
 (defun current-gradient (rs)
-  (destructuring-bind (&key colors &allow-other-keys) (rs-gradient rs)
-    ;; libwpg: the far color starts the ramp, the near one sits at a
-    ;; reference point and, when a reference is given, the ramp mirrors
-    ;; back to the far color.
-    (let ((far (aref colors 1)) (near (aref colors 0))
-          (ref (rs-gradient-ref rs)))
-      (make-gradient :angle (rs-gradient-angle rs)
-                     :stops (if ref
-                                (list (cons 0 far) (cons (first ref) near) (cons 1 far))
-                                (list (cons 0 far) (cons 1 near)))))))
+  (destructuring-bind (&key colors gradient-type &allow-other-keys) (rs-gradient rs)
+    (multiple-value-bind (kind isotropic) (gradient-type-kind gradient-type)
+      (let* ((n (length colors))
+             (far (aref colors (1- n))) (near (aref colors 0))
+             (ref (rs-gradient-ref rs)))
+        (make-gradient
+         :kind kind :isotropic isotropic :angle (rs-gradient-angle rs)
+         :center (rs-gradient-center rs)
+         :stops (cond ((not (eq kind :linear))
+                       ;; The first color at the center.
+                       (loop for i below n
+                             collect (cons (if (= n 1) 0 (/ i (1- n))) (aref colors i))))
+                      ((> n 2)
+                       ;; Not seen in any file: the colors evenly spaced, in
+                       ;; the order two-color ramps run (last color first).
+                       (loop for i below n
+                             collect (cons (/ i (1- n)) (aref colors (- n 1 i)))))
+                      ;; libwpg: the far color starts the ramp, the near one
+                      ;; sits at a reference point and, when a reference is
+                      ;; given, the ramp mirrors back to the far color.
+                      (ref (list (cons 0 far) (cons (first ref) near) (cons 1 far)))
+                      (t (list (cons 0 far) (cons 1 near)))))))))
 
 (defun effective-stroke-width (rs)
   "The pen width, or 0 (a hairline) when it would come out thinner than
@@ -462,7 +514,7 @@ children joined. Other children are drawn on their own."
 
 (defun set-brush-color (rs f)
   (let ((colors (getf f :colors)))
-    (if (and colors (= 2 (length colors)))
+    (if (and colors (>= (length colors) 2))
         (setf (rs-gradient rs) f)
         (let ((c (or (getf f :color) (and colors (plusp (length colors)) (aref colors 0)))))
           (when c
@@ -512,6 +564,7 @@ inside a compound polygon; inside Start WPG they describe the page."
           ((:brush-gradient :dp-brush-gradient)
            (when styles
              (setf (rs-gradient-angle rs) (field :angle)
+                   (rs-gradient-center rs) (cons (/ (field :x-ref) 65535) (/ (field :y-ref) 65535))
                    (rs-gradient-ref rs)
                    (and (/= #xffff (field :x-ref)) (/= #xffff (field :y-ref))
                         ;; libwpg's position of the near color along the ramp.
@@ -631,6 +684,7 @@ defaults: black pen, black brush."
           (rs-dash rs) nil
           (rs-fill rs) (make-color 0 0 0) (rs-fill-opacity rs) 1
           (rs-gradient rs) nil (rs-gradient-angle rs) 0 (rs-gradient-ref rs) nil
+          (rs-gradient-center rs) (cons 1/2 1/2)
           (rs-texture rs) nil)))
 
 (defun build-wpg2 (rs image)

@@ -220,23 +220,53 @@ space MATRIX maps to pixels."
             (a (float (* opacity (/ (color-alpha paint) 255)) 1.0)))
         (lambda (x y) (declare (ignore x y)) (values r g b a))))
     (t
-      (multiple-value-bind (x0 y0 x1 y1) (paths-bounds paths)
-        (let* ((w (max 1d-9 (- x1 x0))) (h (max 1d-9 (- y1 y0)))
-               ;; As in the SVG: from (0.5,0.5)-d to (0.5,0.5)+d in the
-               ;; bounding box, y measured upward.
-               (dx (/ (nth-value 0 (gradient-direction paint)) 2))
-               (dy (/ (nth-value 1 (gradient-direction paint)) 2))
-               (len2 (max 1d-12 (* 4 (+ (* dx dx) (* dy dy)))))
-               (stops (gradient-stops paint)))
-          (lambda (x y)
-            (let* ((u (/ (- (+ x 0.5) x0) w)) (v (/ (- y1 (+ y 0.5)) h))
-                   (tt (/ (+ (* (- u (- 0.5 dx)) (* 2 dx)) (* (- v (- 0.5 dy)) (* 2 dy))) len2))
-                   (tt (min 1 (max 0 tt))))
-              (multiple-value-bind (c0 c1 f) (gradient-span stops tt)
-                (flet ((mix (k) (/ (+ (* (- 1 f) (funcall k c0)) (* f (funcall k c1))) 255.0)))
-                  (values (mix #'color-red) (mix #'color-green) (mix #'color-blue)
-                          (float (* opacity (/ (+ (* (- 1 f) (color-alpha c0)) (* f (color-alpha c1))) 255))
-                                 1.0)))))))))))
+     (multiple-value-bind (x0 y0 x1 y1) (paths-bounds paths)
+       (let ((ramp (gradient-ramp paint x0 y0 x1 y1))
+             (stops (gradient-stops paint)))
+         (lambda (x y)
+           (let ((tt (min 1 (max 0 (funcall ramp (+ x 0.5d0) (+ y 0.5d0))))))
+             (multiple-value-bind (c0 c1 f) (gradient-span stops tt)
+               (flet ((mix (k) (/ (+ (* (- 1 f) (funcall k c0)) (* f (funcall k c1))) 255.0)))
+                 (values (mix #'color-red) (mix #'color-green) (mix #'color-blue)
+                         (float (* opacity (/ (+ (* (- 1 f) (color-alpha c0)) (* f (color-alpha c1))) 255))
+                                1.0)))))))))))
+
+(defun gradient-ramp (gradient x0 y0 x1 y1)
+  "A function of a pixel position giving the GRADIENT's offset there, for
+a shape whose pixel bounds are X0 Y0 X1 Y1."
+  (let* ((w (max 1d-9 (- x1 x0))) (h (max 1d-9 (- y1 y0))))
+    (ecase (gradient-kind gradient)
+      (:linear
+       ;; As in the SVG: from (0.5,0.5)-d to (0.5,0.5)+d in the bounding
+       ;; box, v measured upward.
+       (multiple-value-bind (ux uy) (gradient-direction gradient)
+         (let* ((dx (/ ux 2)) (dy (/ uy 2))
+                (len2 (max 1d-12 (* 4 (+ (* dx dx) (* dy dy))))))
+           (lambda (x y)
+             (let ((u (/ (- x x0) w)) (v (/ (- y1 y) h)))
+               (/ (+ (* (- u (- 0.5 dx)) (* 2 dx)) (* (- v (- 0.5 dy)) (* 2 dy))) len2))))))
+      ((:radial :square)
+       (let* ((center (gradient-center gradient))
+              (cu (car center)) (cv (cdr center))
+              (cx (+ x0 (* w cu))) (cy (+ y0 (* h cv)))
+              (a (* pi (/ (gradient-angle gradient) 180)))
+              (cos (cos a)) (sin (sin a))
+              (isotropic (gradient-isotropic gradient))
+              (radial (eq (gradient-kind gradient) :radial)))
+         (labels ((offset (dx dy)
+                    ;; Distance from the center before scaling to the corners.
+                    (multiple-value-bind (dx dy)
+                        ;; Stretch to the box unless isotropic, then turn by
+                        ;; the angle.
+                        (let ((ex (if isotropic dx (/ dx w))) (ey (if isotropic dy (/ dy h))))
+                          (values (+ (* cos ex) (* sin ey)) (- (* cos ey) (* sin ex))))
+                      (if radial
+                          (sqrt (+ (* dx dx) (* dy dy)))
+                          (max (abs dx) (abs dy))))))
+           (let ((reach (max 1d-12
+                             (loop for (px . py) in (list (cons x0 y0) (cons x1 y0) (cons x0 y1) (cons x1 y1))
+                                   maximize (offset (- px cx) (- py cy))))))
+             (lambda (x y) (/ (offset (- x cx) (- y cy)) reach)))))))))
 
 (defun gradient-span (stops tt)
   "The two stop colors around TT and how far TT is between them."

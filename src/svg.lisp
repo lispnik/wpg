@@ -35,10 +35,42 @@
   (apply #'format (sw-stream sw) control args)
   (terpri (sw-stream sw)))
 
-(defun gradient-paint (sw gradient)
-  "Write a <linearGradient> for GRADIENT and return a paint reference to it.
-Called while a shape's attributes are being built, so the definition lands
-just before the shape."
+(defun stops-svg (stops)
+  (format nil "~{~A~}"
+          (loop for (offset . c) in stops
+                collect (format nil "<stop offset=\"~A\" stop-color=\"~A\"~:[ stop-opacity=\"~A\"~;~*~]/>"
+                                (svg-num offset) (color-hex c)
+                                (= 255 (color-alpha c)) (svg-num (opacity-of c))))))
+
+(defun radial-paint (sw gradient shape)
+  "A <radialGradient> for a radial or square GRADIENT. SVG has no square
+gradient, so those are drawn as the nearest radial one."
+  (let* ((id (format nil "g~D" (incf (sw-gradient-count sw))))
+         (cu (car (gradient-center gradient))) (cv (cdr (gradient-center gradient)))
+         (corners (list (cons 0 0) (cons 1 0) (cons 0 1) (cons 1 1))))
+    (multiple-value-bind (x0 y0 x1 y1) (and shape (shape-bounds shape))
+      (if (and (gradient-isotropic gradient) x0)
+          ;; Round: in the shape's own coordinates (y up), reaching the
+          ;; farthest corner of its box.
+          (let* ((w (- x1 x0)) (h (- y1 y0))
+                 (cx (+ x0 (* cu w))) (cy (- y1 (* cv h)))
+                 (r (loop for (u . v) in corners
+                          maximize (sqrt (+ (expt (* w (- u cu)) 2) (expt (* h (- v cv)) 2))))))
+            (emit sw "<radialGradient id=\"~A\" gradientUnits=\"userSpaceOnUse\" cx=\"~A\" cy=\"~A\" r=\"~A\">~A</radialGradient>"
+                  id (svg-num cx) (svg-num cy) (svg-num (max r 1d-6)) (stops-svg (gradient-stops gradient))))
+          ;; Stretched with the box (whose y runs up, so the center flips).
+          (let ((r (loop for (u . v) in corners
+                         maximize (sqrt (+ (expt (- u cu) 2) (expt (- v cv) 2))))))
+            (emit sw "<radialGradient id=\"~A\" cx=\"~A\" cy=\"~A\" r=\"~A\">~A</radialGradient>"
+                  id (svg-num cu) (svg-num (- 1 cv)) (svg-num r) (stops-svg (gradient-stops gradient))))))
+    (format nil "url(#~A)" id)))
+
+(defun gradient-paint (sw gradient &optional shape)
+  "Write a gradient definition for GRADIENT and return a paint reference to
+it. Called while a shape's attributes are being built, so the definition
+lands just before the shape."
+  (if (not (eq (gradient-kind gradient) :linear))
+      (radial-paint sw gradient shape)
   (multiple-value-bind (ux uy) (gradient-direction gradient)
   (let* ((id (format nil "g~D" (incf (sw-gradient-count sw))))
          (dx (/ ux 2)) (dy (/ uy 2)))
@@ -49,7 +81,7 @@ just before the shape."
                 collect (format nil "<stop offset=\"~A\" stop-color=\"~A\"~:[ stop-opacity=\"~A\"~;~*~]/>"
                                 (svg-num offset) (color-hex c)
                                 (= 255 (color-alpha c)) (svg-num (opacity-of c)))))
-    (format nil "url(#~A)" id))))
+    (format nil "url(#~A)" id)))))
 
 (defun texture-paint (sw texture)
   "Write a <pattern> tiling TEXTURE and return a paint reference to it, or
@@ -64,13 +96,13 @@ the texture's average color when bitmaps are being left out."
                 id w h w h h (xml-escape href))
           (format nil "url(#~A)" id)))))
 
-(defun style-attributes (sw style)
+(defun style-attributes (sw style &optional shape)
   (with-output-to-string (s)
     (when (style-fill-rule style)
       (format s " fill-rule=\"~(~A~)\"" (style-fill-rule style)))
     (let ((fill (style-fill style)))
       (if fill
-          (progn (format s " fill=\"~A\"" (cond ((gradient-p fill) (gradient-paint sw fill))
+          (progn (format s " fill=\"~A\"" (cond ((gradient-p fill) (gradient-paint sw fill shape))
                                                    ((texture-p fill) (texture-paint sw fill))
                                                    (t (color-hex fill))))
                  (unless (= 1 (style-fill-opacity style))
@@ -178,26 +210,26 @@ the texture's average color when bitmaps are being left out."
        (emit sw "<line x1=\"~A\" y1=\"~A\" x2=\"~A\" y2=\"~A\"~A/>"
              (svg-num (line-shape-x1 shape)) (svg-num (line-shape-y1 shape))
              (svg-num (line-shape-x2 shape)) (svg-num (line-shape-y2 shape))
-             (style-attributes sw (shape-style shape))))
+             (style-attributes sw (shape-style shape) shape)))
       (poly-shape
        (emit sw "<~:[polyline~;polygon~] points=\"~A\"~A/>"
              (poly-shape-closed shape) (points-attribute (poly-shape-points shape))
-             (style-attributes sw (shape-style shape))))
+             (style-attributes sw (shape-style shape) shape)))
       (rect-shape
        (emit sw "<rect x=\"~A\" y=\"~A\" width=\"~A\" height=\"~A\"~A~A~A/>"
              (svg-num (rect-shape-x shape)) (svg-num (rect-shape-y shape))
              (svg-num (rect-shape-width shape)) (svg-num (rect-shape-height shape))
              (if (plusp (rect-shape-rx shape)) (format nil " rx=\"~A\"" (svg-num (rect-shape-rx shape))) "")
              (if (plusp (rect-shape-ry shape)) (format nil " ry=\"~A\"" (svg-num (rect-shape-ry shape))) "")
-             (style-attributes sw (shape-style shape))))
+             (style-attributes sw (shape-style shape) shape)))
       (ellipse-shape
        (emit sw "<ellipse cx=\"~A\" cy=\"~A\" rx=\"~A\" ry=\"~A\"~A/>"
              (svg-num (ellipse-shape-cx shape)) (svg-num (ellipse-shape-cy shape))
              (svg-num (ellipse-shape-rx shape)) (svg-num (ellipse-shape-ry shape))
-             (style-attributes sw (shape-style shape))))
+             (style-attributes sw (shape-style shape) shape)))
       (path-shape
        (emit sw "<path d=\"~A\"~A/>" (path-data (path-shape-commands shape))
-             (style-attributes sw (shape-style shape))))
+             (style-attributes sw (shape-style shape) shape)))
       (text-shape (write-text-shape sw shape))
       (image-shape (write-image-shape sw shape)))
     (unless (identity-matrix-p transform)

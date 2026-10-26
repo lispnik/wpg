@@ -171,3 +171,60 @@
     (let ((shape (first-shape (rec2 #x31 0 255 255 255 0))))
       (is (wpg:poly-shape-p shape))
       (is (equal '(0 0 0) (rgb (wpg:style-fill (wpg:shape-style shape))))))))
+
+(defun gradient-square-file (type &key (x-ref 32767) (y-ref 32767) (colors '((255 0 0) (0 0 255))))
+  "A 1-inch page filled by a square polygon with a gradient brush of TYPE."
+  (wpg2 (start2 :bounds '(0 0 1200 1200))
+        (rec2 #x2f (u16 0) (u16 0) (u16 x-ref) (u16 y-ref) 0)
+        (rec2 #x31 type (u16 (length colors))
+              (loop for c in colors collect (list c 0))
+              (loop repeat (1- (length colors)) collect (u16 0)))
+        (rec2 #x15 (u16 (logior (ash 1 13) (ash 1 14))) (u16 4)
+              (mapcar #'s16 '(0 0 1200 0 1200 1200 0 1200)))))
+
+(test gradient-kinds
+  (flet ((fill-of (type)
+           (wpg:style-fill (wpg:shape-style (first (wpg:scene-shapes
+                                                    (wpg:build-scene
+                                                     (wpg:read-wpg (gradient-square-file type)))))))))
+    (is (eq :linear (wpg:gradient-kind (fill-of 1))))
+    (is (eq :radial (wpg:gradient-kind (fill-of 4))))
+    (is (wpg:gradient-isotropic (fill-of 4)))
+    (is (not (wpg:gradient-isotropic (fill-of 6))))
+    (is (eq :square (wpg:gradient-kind (fill-of 10))))
+    ;; Radial: the first color at the center.
+    (is (equal '(255 0 0) (rgb (cdr (first (wpg:gradient-stops (fill-of 4)))))))))
+
+(test radial-gradient-pixels
+  ;; Red at the center, blue at the corners.
+  (multiple-value-bind (octets w)
+      (wpg:render-scene (wpg:build-scene (wpg:read-wpg (gradient-square-file 4))) :dpi 21)
+    (destructuring-bind (r g b a) (pixel octets w 10 10)
+      (declare (ignore g a))
+      (is (> r 240)) (is (< b 15)))
+    (destructuring-bind (r g b a) (pixel octets w 0 0)
+      (declare (ignore g a))
+      (is (< r 25)) (is (> b 230))))
+  ;; Off-center, toward the top-left: that corner is reddest.
+  (multiple-value-bind (octets w)
+      (wpg:render-scene (wpg:build-scene (wpg:read-wpg (gradient-square-file 10 :x-ref 16383 :y-ref 16383)))
+                        :dpi 21)
+    (is (> (first (pixel octets w 5 5)) 200))
+    (is (> (first (pixel octets w 1 1)) (first (pixel octets w 19 19))))))
+
+(test radial-gradient-svg
+  (let ((svg (wpg:svg-string (wpg:read-wpg (gradient-square-file 4)))))
+    (is (has "<radialGradient id=\"g1\" gradientUnits=\"userSpaceOnUse\" cx=\"599.991\" cy=\"600.009\"" svg))
+    (is (has "<stop offset=\"0\" stop-color=\"#ff0000\"/>" svg))))
+
+(test many-color-gradient
+  ;; Three colors, evenly spaced, last first as two-color ramps run.
+  (let ((stops (wpg:gradient-stops
+                (wpg:style-fill (wpg:shape-style
+                                 (first (wpg:scene-shapes
+                                         (wpg:build-scene
+                                          (wpg:read-wpg
+                                           (gradient-square-file
+                                            1 :colors '((255 0 0) (0 255 0) (0 0 255))))))))))))
+    (is (equal '(0 1/2 1) (mapcar #'car stops)))
+    (is (equal '((0 0 255) (0 255 0) (255 0 0)) (mapcar (lambda (s) (rgb (cdr s))) stops)))))

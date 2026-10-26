@@ -133,6 +133,7 @@
    #:style #:style-p #:style-fill #:style-fill-opacity #:style-fill-rule #:style-stroke
    #:style-stroke-opacity #:style-stroke-width #:style-dash
    #:gradient #:gradient-p #:gradient-angle #:gradient-stops #:gradient-direction
+   #:gradient-kind #:gradient-center #:gradient-isotropic #:shape-bounds
    #:texture #:texture-p #:texture-bitmap #:texture-width #:texture-height #:texture-color
    #:shape #:shape-p #:shape-transform #:shape-style
    #:line-shape #:line-shape-p #:line-shape-x1 #:line-shape-y1 #:line-shape-x2 #:line-shape-y2
