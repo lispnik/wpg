@@ -1,0 +1,74 @@
+name: CI
+
+# Runs the FiveAM suite and builds the `wpg` binary on Linux.
+# Dependencies are vendored under ocicl/ locally but gitignored, so CI
+# restores them from ocicl.csv.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: linux/x86_64 · sbcl
+    runs-on: ubuntu-latest
+    env:
+      SBCL_VERSION: "2.5.9"
+    steps:
+      - uses: actions/checkout@v4
+
+      # The official binary, not apt's: Ubuntu's sbcl is years old.
+      - name: Cache SBCL
+        uses: actions/cache@v4
+        with:
+          path: ~/sbcl
+          key: sbcl-x86_64-${{ env.SBCL_VERSION }}-v1
+
+      - name: Install SBCL
+        run: |
+          set -euo pipefail
+          if [ ! -x "$HOME/sbcl/bin/sbcl" ]; then
+            cd "$RUNNER_TEMP"
+            curl -fsSL -o sbcl.tar.bz2 \
+              "https://downloads.sourceforge.net/project/sbcl/sbcl/$SBCL_VERSION/sbcl-$SBCL_VERSION-x86-64-linux-binary.tar.bz2"
+            tar -xjf sbcl.tar.bz2
+            ( cd "sbcl-$SBCL_VERSION-x86-64-linux" && INSTALL_ROOT="$HOME/sbcl" sh install.sh )
+          fi
+          echo "$HOME/sbcl/bin" >> "$GITHUB_PATH"
+          echo "SBCL_HOME=$HOME/sbcl/lib/sbcl" >> "$GITHUB_ENV"
+
+      - name: Cache ocicl
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/bin
+            ~/.local/share/ocicl
+          key: ocicl-x86_64-v1
+
+      - name: Install ocicl
+        run: |
+          if ! [ -x "$HOME/.local/bin/ocicl" ]; then
+            git clone --depth 1 --quiet https://github.com/ocicl/ocicl.git /tmp/ocicl
+            ( cd /tmp/ocicl && sbcl --non-interactive --load setup.lisp >/dev/null )
+            "$HOME/.local/bin/ocicl" setup >/dev/null
+          fi
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ocicl
+          key: deps-x86_64-${{ hashFiles('ocicl.csv') }}
+
+      - name: Restore dependencies
+        run: ocicl install
+
+      - name: Run tests
+        run: make test
+
+      - name: Build bin/wpg
+        run: |
+          make
+          bin/wpg info tests/data/imagemagick-input.wpg tests/data/libreoffice-wpg1.wpg

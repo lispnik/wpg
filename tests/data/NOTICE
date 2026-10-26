@@ -1,0 +1,13 @@
+Test fixtures from other projects' test suites, used here unmodified.
+
+imagemagick-input.wpg
+  From ImageMagick (PerlMagick/t/input.wpg),
+  https://github.com/ImageMagick/ImageMagick6
+  Licensed under the ImageMagick License, https://imagemagick.org/script/license.php
+  SHA-1 ac49e90b40776ba1769d93a22a26369716de680f
+
+libreoffice-wpg1.wpg
+  From LibreOffice (writerperfect/qa/unit/data/draw/libwpg/pass/WPG1.wpg),
+  https://github.com/LibreOffice/core
+  Licensed under the Mozilla Public License 2.0, https://mozilla.org/MPL/2.0/
+  SHA-1 2bc5112349434e94d9b9bf65abb62448d5c1ccb4
