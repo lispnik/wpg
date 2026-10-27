@@ -153,14 +153,52 @@ drawn.")
                  t)))
     (path-shape (command-paths (path-shape-commands shape)))))
 
-(defun transform-path (path closed matrix)
-  "PATH flattened and mapped through MATRIX, as a polyline path."
+(defun path-detail (paths matrix canvas)
+  "The scale to flatten PATHS (in the space MATRIX maps to pixels) at.
+cl-paths splits arcs into one segment per unit of length, so flattening
+in file units would give a 1200 dpi circle thousands of points; this is
+a few times the pixel scale instead, capped so a shape far bigger than
+the canvas (a damaged file) still gets a bounded number of segments."
+  (let ((extent 1d0))
+    (dolist (path paths)
+      (loop for k across (paths::path-knots path)
+            for x = (paths:point-x k) for y = (paths:point-y k)
+            minimize x into x0 maximize x into x1
+            minimize y into y0 maximize y into y1
+            finally (when x0 (setf extent (max extent (- x1 x0) (- y1 y0)))))
+      ;; An arc can reach far beyond its knots: by its radii, and by the
+      ;; larger radii SVG rules give it when they are too small to span
+      ;; from one knot to the next.
+      (let ((knots (paths::path-knots path)))
+        (loop for arc across (paths::path-interpolations path)
+              for i from 0
+              when (and (typep arc 'paths::arc) (plusp (length knots)))
+                do (with-slots ((rx paths::rx) (ry paths::ry) (rotation paths::x-axis-rotation)
+                                (large paths::large-arc-flag) (sweep paths::sweep-flag))
+                       arc
+                     (multiple-value-bind (center srx sry)
+                         (paths::svg-arc-parameters
+                          (aref knots (mod (1- i) (length knots))) (aref knots i)
+                          rx ry rotation large sweep)
+                       (setf extent (max extent (* 2 (abs rx)) (* 2 (abs ry))
+                                         (if center (* 2 (max (abs srx) (abs sry))) 0))))))))
+    ;; Four times the pixel scale: cl-paths flattens Bezier curves to
+    ;; within half a unit, so this keeps them within an eighth of a pixel.
+    (max 1d-6 (min (* 4 (matrix-scale matrix))
+                   (/ (* 16 (+ (canvas-width canvas) (canvas-height canvas))) extent)))))
+
+(defun transform-path (path closed matrix &optional (detail 1))
+  "PATH flattened and mapped through MATRIX, as a polyline path. It is
+flattened at DETAIL times its own size; see PATH-DETAIL."
   (let ((points '())
-        (iterator (paths:path-iterator-segmented path)))
+        (iterator (paths:path-iterator-segmented
+                   (if (= detail 1) path (paths:path-scale (paths:path-clone path) detail detail))))
+        (unscale (/ detail)))
     (loop (multiple-value-bind (interpolation knot end-p) (paths:path-iterator-next iterator)
             (declare (ignore interpolation))
             (when knot
-              (let ((p (apply-matrix matrix (cons (paths:point-x knot) (paths:point-y knot)))))
+              (let ((p (apply-matrix matrix (cons (* unscale (paths:point-x knot))
+                                                  (* unscale (paths:point-y knot))))))
                 (push (paths:make-point (car p) (cdr p)) points)))
             (when (or end-p (null knot)) (return))))
     (setf points (nreverse points))
@@ -189,11 +227,29 @@ drawn.")
                 (when (or end-p (null knot)) (return))))))
     (values x0 y0 x1 y1)))
 
-(defun texture-function (texture opacity matrix)
-  "Pixel (x, y) -> r g b a for TEXTURE, tiled in the space MATRIX maps to pixels."
+(defun bitmap-sampler (bitmap samples)
+  "A function of (column, row) returning r g b a (0..1) for BITMAP's pixel
+there. With no more pixels than SAMPLES, the number of lookups expected,
+the bitmap is converted to RGBA once; a bigger one (a 64-pixel render of
+a 50-megapixel bitmap) is read pixel by pixel as needed."
+  (let ((bw (wpg-bitmap-width bitmap)) (bh (wpg-bitmap-height bitmap)))
+    (if (<= (* bw bh) samples)
+        (let ((rgba (bitmap-rgba-octets bitmap)))
+          (lambda (col row)
+            (let ((i (* 4 (+ col (* row bw)))))
+              (values (/ (aref rgba i) 255.0) (/ (aref rgba (+ i 1)) 255.0)
+                      (/ (aref rgba (+ i 2)) 255.0) (/ (aref rgba (+ i 3)) 255.0)))))
+        (lambda (col row)
+          (let ((c (bitmap-pixel bitmap col row)))
+            (values (/ (color-red c) 255.0) (/ (color-green c) 255.0)
+                    (/ (color-blue c) 255.0) (/ (color-alpha c) 255.0)))))))
+
+(defun texture-function (texture opacity matrix samples)
+  "Pixel (x, y) -> r g b a for TEXTURE, tiled in the space MATRIX maps to
+pixels. SAMPLES is about how many pixels will be asked for."
   (let* ((bitmap (texture-bitmap texture))
          (bw (wpg-bitmap-width bitmap)) (bh (wpg-bitmap-height bitmap))
-         (rgba (bitmap-rgba-octets bitmap))
+         (sample (bitmap-sampler bitmap samples))
          (tw (texture-width texture)) (th (texture-height texture))
          (from-pixels (invert-matrix matrix)))
     (lambda (x y)
@@ -202,18 +258,16 @@ drawn.")
           (let* ((p (apply-matrix from-pixels (cons (+ x 0.5) (+ y 0.5))))
                  ;; Tiles run right and down from the origin; y is up.
                  (col (min (1- bw) (floor (* bw (/ (mod (car p) tw) tw)))))
-                 (row (min (1- bh) (floor (* bh (/ (mod (- (cdr p)) th) th)))))
-                 (i (* 4 (+ col (* row bw)))))
-            (values (/ (aref rgba i) 255.0) (/ (aref rgba (+ i 1)) 255.0)
-                    (/ (aref rgba (+ i 2)) 255.0)
-                    (* opacity (/ (aref rgba (+ i 3)) 255.0))))))))
+                 (row (min (1- bh) (floor (* bh (/ (mod (- (cdr p)) th) th))))))
+            (multiple-value-bind (r g b a) (funcall sample col row)
+              (values r g b (* opacity a))))))))
 
-(defun paint-function (paint opacity paths &optional matrix)
+(defun paint-function (paint opacity paths &optional matrix (samples most-positive-fixnum))
   "A function of pixel (x, y) returning r g b a (0..1) for PAINT, a COLOR,
 a GRADIENT laid across the pixel bounds of PATHS, or a TEXTURE tiled in the
 space MATRIX maps to pixels."
   (cond
-    ((texture-p paint) (texture-function paint opacity matrix))
+    ((texture-p paint) (texture-function paint opacity matrix samples))
     ((color-p paint)
       (let ((r (/ (color-red paint) 255.0)) (g (/ (color-green paint) 255.0))
             (b (/ (color-blue paint) 255.0))
@@ -278,38 +332,192 @@ a shape whose pixel bounds are X0 Y0 X1 Y1."
         finally (let ((last (car (last stops))))
                   (return (values (cdr last) (cdr last) 0)))))
 
+(defun contour-points (path)
+  "The knots of PATH, flattened, as VECTORS:UPDATE-STATE visits them: a
+list of (x . y), closed implicitly."
+  (let ((iterator (paths:path-iterator-segmented path))
+        (points '()))
+    (loop (multiple-value-bind (interpolation knot end-p) (paths:path-iterator-next iterator)
+            (declare (ignore interpolation))
+            (when knot (push (cons (paths:point-x knot) (paths:point-y knot)) points))
+            (when (or end-p (null knot)) (return))))
+    (nreverse points)))
+
+(defun clip-contour (points x0 y0 x1 y1)
+  "The closed polygon POINTS clipped to the rectangle X0 Y0 X1 Y1, one
+edge at a time (Sutherland-Hodgman). Clipping to a half-plane keeps the
+winding number of every point inside it, so the fill inside the rectangle
+is unchanged whatever the rule."
+  (flet ((clip (points inside intersect)
+           (let ((out '()))
+             (loop for (p . rest) on points
+                   for q = (if rest (first rest) (first points))
+                   do (let ((pin (funcall inside p)) (qin (funcall inside q)))
+                        (when pin (push p out))
+                        (unless (eq pin qin) (push (funcall intersect p q) out))))
+             (nreverse out))))
+    (macrolet ((edge (coord limit test other)
+                 ;; Keep points with COORD TEST LIMIT; crossings land on it.
+                 `(setf points
+                        (clip points
+                              (lambda (p) (,test (,coord p) ,limit))
+                              (lambda (p q)
+                                (let ((u (/ (- ,limit (,coord p)) (- (,coord q) (,coord p)))))
+                                  ,(if (eq coord 'car)
+                                       `(cons ,limit (+ (,other p) (* u (- (,other q) (,other p)))))
+                                       `(cons (+ (,other p) (* u (- (,other q) (,other p)))) ,limit))))))))
+      (edge car x0 >= cdr)
+      (edge car x1 <= cdr)
+      (edge cdr y0 >= car)
+      (edge cdr y1 <= car))
+    points))
+
+(defun add-paths (state paths canvas)
+  "Add PATHS to the cl-aa STATE. Outlines reaching far off the canvas are
+clipped first: cl-aa makes a cell for every pixel an outline crosses, so a
+shape scaled up to millions of pixels across would take forever."
+  (let* ((w (canvas-width canvas)) (h (canvas-height canvas))
+         (x0 -2d0) (y0 -2d0) (x1 (+ w 2d0)) (y1 (+ h 2d0)))
+    (multiple-value-bind (bx0 by0 bx1 by1) (paths-bounds paths)
+      (if (and (>= bx0 (- x0 w)) (>= by0 (- y0 h)) (<= bx1 (+ x1 w)) (<= by1 (+ y1 h)))
+          (vectors:update-state state paths)
+          (dolist (path paths)
+            (let ((points (clip-contour (contour-points path) x0 y0 x1 y1)))
+              (when (rest points)
+                (loop for (p . rest) on points
+                      for q = (if rest (first rest) (first points))
+                      do (aa:line-f state (car p) (cdr p) (car q) (cdr q))))))))))
+
 (defun fill-paths (canvas paths paint opacity &key (rule :nonzero) matrix)
   (when paths
     (let ((state (aa:make-state))
-          (paint (paint-function paint opacity paths matrix))
+          (paint (paint-function paint opacity paths matrix
+                                 (* (canvas-width canvas) (canvas-height canvas))))
           (alpha-of (if (eq rule :evenodd) #'even-odd-alpha #'nonzero-alpha)))
-      (vectors:update-state state paths)
-      (aa:cells-sweep state
-                      (lambda (x y alpha)
-                        (let ((coverage (/ (funcall alpha-of alpha) 256.0)))
-                          (when (plusp coverage)
-                            (multiple-value-bind (r g b a) (funcall paint x y)
-                              (blend canvas x y r g b (* a coverage))))))))))
+      (add-paths state paths canvas)
+      ;; Only the canvas: a shape can cover far more pixels than it has.
+      (aa:cells-sweep/rectangle
+       state 0 0 (canvas-width canvas) (canvas-height canvas)
+       (lambda (x y alpha)
+         (let ((coverage (/ (funcall alpha-of alpha) 256.0)))
+           (when (plusp coverage)
+             (multiple-value-bind (r g b a) (funcall paint x y)
+               (blend canvas x y r g b (* a coverage))))))))))
 
 (defun draw-outline (canvas local-paths matrix style)
   "Fill and stroke LOCAL-PATHS, a list of (path . closed-p) in the shape's
 coordinates, mapped to pixels by MATRIX."
-  (let ((pixel-paths (loop for (path . closed) in local-paths
-                           collect (transform-path path closed matrix)))
+  (let* ((detail (path-detail (mapcar #'car local-paths) matrix canvas))
+         (pixel-paths (loop for (path . closed) in local-paths
+                            collect (transform-path path closed matrix detail)))
         (scale (matrix-scale matrix)))
     (when (style-fill style)
       (fill-paths canvas pixel-paths (style-fill style) (style-fill-opacity style)
                   :rule (or (style-fill-rule style) :nonzero) :matrix matrix))
     (when (style-stroke style)
-      (let* ((width (if (zerop (style-stroke-width style)) 1d0
-                        (max 1d0 (* scale (style-stroke-width style)))))
-             (outline (if (style-dash style)
-                          (paths:dash-path pixel-paths
-                                           (map 'vector (lambda (d) (max 0.5d0 (* scale d)))
-                                                (style-dash style)))
-                          pixel-paths)))
-        (fill-paths canvas (paths:stroke-path outline width :joint :round :caps :butt)
+      (let ((width (if (zerop (style-stroke-width style)) 1d0
+                       (max 1d0 (* scale (style-stroke-width style))))))
+        (fill-paths canvas
+                    (stroke-outline pixel-paths width
+                                    (and (style-dash style)
+                                         (map 'vector (lambda (d) (max 0.5d0 (* scale d)))
+                                              (style-dash style))))
                     (style-stroke style) (style-stroke-opacity style))))))
+
+(defvar *max-dashes* 100000
+  "Draw a dashed line solid if it would take more dashes than this.")
+
+(defun polyline-length (paths)
+  (loop for path in paths
+        sum (loop for (p . rest) on (contour-points path)
+                  while rest
+                  sum (let ((q (first rest)))
+                        (sqrt (+ (expt (- (car q) (car p)) 2) (expt (- (cdr q) (cdr p)) 2)))))))
+
+(defun ccw-path (points)
+  "A closed polyline path through POINTS, a list of (x . y), wound so its
+signed area is positive."
+  (let ((area (loop for (p . rest) on points
+                    for q = (if rest (first rest) (first points))
+                    sum (- (* (car p) (cdr q)) (* (car q) (cdr p))))))
+    (paths:make-simple-path (mapcar (lambda (p) (paths:make-point (car p) (cdr p)))
+                                    (if (minusp area) (reverse points) points))
+                            :closed-polyline)))
+
+(defun join-points (p dx1 dy1 dx2 dy2 r)
+  "The wedge of a round join at P between a segment arriving along
+\(DX1, DY1) and one leaving along (DX2, DY2), radius R: P and an arc on the
+outer side of the turn. Its straight sides are the ends of the two
+segments' quads, so the pieces meet without overlapping there."
+  (let* ((side (if (plusp (- (* dx1 dy2) (* dy1 dx2))) -1 1)) ; outer side
+         (a1 (atan (* side dx1) (* side (- dy1))))
+         (a2 (atan (* side dx2) (* side (- dy2))))
+         (turn (let ((d (- a2 a1)))     ; the short way round
+                 (cond ((> d pi) (- d (* 2 pi))) ((< d (- pi)) (+ d (* 2 pi))) (t d))))
+         (n (max 1 (min 512 (ceiling (* (abs turn) (/ (sqrt (/ r 0.2d0)) 2)))))))
+    (cons p (loop for i from 0 to n
+                  for a = (+ a1 (* turn (/ i n)))
+                  collect (cons (+ (car p) (* r (cos a))) (+ (cdr p) (* r (sin a))))))))
+
+(defun polyline-points (path)
+  "PATH's points without repeats, and whether it is closed."
+  (let ((points '()))
+    (dolist (p (contour-points path))
+      (unless (and points (= (car p) (car (first points))) (= (cdr p) (cdr (first points))))
+        (push p points)))
+    (setf points (nreverse points))
+    (let ((closed (eq (paths::path-type path) :closed-polyline)))
+      (when (and closed (rest points)
+                 (= (car (first points)) (car (first (last points))))
+                 (= (cdr (first points)) (cdr (first (last points)))))
+        (setf points (butlast points)))
+      (values points closed))))
+
+(defun stroke-outline (paths width dash)
+  "Paths to fill, nonzero, for PATHS (pixel polylines) stroked WIDTH wide
+with butt caps and round joins, dashed by DASH (a vector of pixel
+lengths, or NIL).
+The stroke is a quad for each segment and a wedge for each join, all
+wound the same way, so where they overlap they add up instead of
+cancelling, and along their shared sides they tile exactly.
+(cl-paths' STROKE-PATH makes one outline per side, and the inner one of a
+stroke wider than its shape turns inside out and cuts a hole.) Every part
+is bounded in size, so a damaged file asking for a stroke millions of
+pixels wide costs no more than any other."
+  (let* ((r (/ width 2))
+         (dash (and dash
+                    (< (/ (polyline-length paths) (max 1d-3 (reduce #'+ dash))) *max-dashes*)
+                    dash))
+         (lines (if dash (paths:dash-path paths dash) paths))
+         (pieces '()))
+    (dolist (line lines)
+      (multiple-value-bind (points closed) (polyline-points line)
+        (when dash (setf closed nil))   ; dashes are open
+        (let* ((v (coerce points 'vector))
+               (n (length v))
+               (closed (and closed (> n 2))))
+          (flet ((pt (i) (aref v (mod i n))))
+            ;; A quad for each segment.
+            (dotimes (i (if closed n (1- n)))
+              (let* ((p (pt i)) (q (pt (1+ i)))
+                     (dx (- (car q) (car p))) (dy (- (cdr q) (cdr p)))
+                     (len (sqrt (+ (* dx dx) (* dy dy)))))
+                (when (plusp len)
+                  (let ((nx (* r (/ (- dy) len))) (ny (* r (/ dx len))))
+                    (push (ccw-path (list (cons (+ (car p) nx) (+ (cdr p) ny))
+                                          (cons (+ (car q) nx) (+ (cdr q) ny))
+                                          (cons (- (car q) nx) (- (cdr q) ny))
+                                          (cons (- (car p) nx) (- (cdr p) ny))))
+                          pieces)))))
+            ;; A round join at every corner of a closed line, and at the
+            ;; inner points of an open one.
+            (loop for i from (if closed 0 1) below (if closed n (1- n))
+                  do (let* ((o (pt (1- i))) (p (pt i)) (q (pt (1+ i)))
+                            (dx1 (- (car p) (car o))) (dy1 (- (cdr p) (cdr o)))
+                            (dx2 (- (car q) (car p))) (dy2 (- (cdr q) (cdr p))))
+                       (unless (or (and (zerop dx1) (zerop dy1)) (and (zerop dx2) (zerop dy2)))
+                         (push (ccw-path (join-points p dx1 dy1 dx2 dy2 r)) pieces))))))))
+    (nreverse pieces)))
 
 ;;; Text
 
@@ -381,7 +589,9 @@ and the line's natural width."
                                                    :scale-x scale :scale-y scale)))
                               (when outline
                                 (fill-paths canvas
-                                            (mapcar (lambda (p) (transform-path p t matrix)) outline)
+                                            (let ((detail (path-detail outline matrix canvas)))
+                                              (mapcar (lambda (p) (transform-path p t matrix detail))
+                                                      outline))
                                             (or (getf run :color) (text-shape-color shape))
                                             1)))))))))
 
@@ -391,7 +601,6 @@ and the line's natural width."
   "Draw an image shape; MATRIX maps file space to pixels."
   (let* ((bitmap (image-shape-bitmap shape))
          (bw (wpg-bitmap-width bitmap)) (bh (wpg-bitmap-height bitmap))
-         (rgba (bitmap-rgba-octets bitmap))
          (x1 (image-shape-x1 shape)) (y1 (image-shape-y1 shape))
          (x2 (image-shape-x2 shape)) (y2 (image-shape-y2 shape))
          (w (- x2 x1)) (h (- y2 y1))
@@ -401,12 +610,15 @@ and the line's natural width."
          (from-pixels (invert-matrix to-pixels))
          (turn (* pi (/ (wpg-bitmap-rotation bitmap) 180))))
     (when (and from-pixels (plusp w) (plusp h))
-      (let ((corners (mapcar (lambda (p) (apply-matrix to-pixels p))
-                             (list (cons x1 y1) (cons x2 y1) (cons x1 y2) (cons x2 y2)))))
-        (loop for py from (max 0 (floor (reduce #'min corners :key #'cdr)))
-                below (min (canvas-height canvas) (ceiling (reduce #'max corners :key #'cdr)))
-              do (loop for px from (max 0 (floor (reduce #'min corners :key #'car)))
-                         below (min (canvas-width canvas) (ceiling (reduce #'max corners :key #'car)))
+      (let* ((corners (mapcar (lambda (p) (apply-matrix to-pixels p))
+                              (list (cons x1 y1) (cons x2 y1) (cons x1 y2) (cons x2 y2))))
+             (px0 (max 0 (floor (reduce #'min corners :key #'car))))
+             (px1 (min (canvas-width canvas) (ceiling (reduce #'max corners :key #'car))))
+             (py0 (max 0 (floor (reduce #'min corners :key #'cdr))))
+             (py1 (min (canvas-height canvas) (ceiling (reduce #'max corners :key #'cdr))))
+             (sample (bitmap-sampler bitmap (* (max 0 (- px1 px0)) (max 0 (- py1 py0))))))
+        (loop for py from py0 below py1
+              do (loop for px from px0 below px1
                        do (let* ((f (apply-matrix from-pixels (cons (+ px 0.5) (+ py 0.5))))
                                  ;; Into the image's own space: x right, y down.
                                  (qx (- (car f) x1)) (qy (- y2 (cdr f))))
@@ -418,11 +630,8 @@ and the line's natural width."
                                       qy (+ (/ h 2) (* (sin turn) cx) (* (cos turn) cy)))))
                             (let ((col (floor (* bw (/ qx w)))) (row (floor (* bh (/ qy h)))))
                               (when (and (< -1 col bw) (< -1 row bh))
-                                (let ((i (* 4 (+ col (* row bw)))))
-                                  (blend canvas px py
-                                         (/ (aref rgba i) 255.0) (/ (aref rgba (+ i 1)) 255.0)
-                                         (/ (aref rgba (+ i 2)) 255.0)
-                                         (/ (aref rgba (+ i 3)) 255.0))))))))))))
+                                (multiple-value-bind (r g b a) (funcall sample col row)
+                                  (blend canvas px py r g b a)))))))))))
 
 ;;; Entry points
 

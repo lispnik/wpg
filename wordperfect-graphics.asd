@@ -47,7 +47,7 @@
 (asdf:defsystem #:wordperfect-graphics/tests
   :description "Tests for wordperfect-graphics."
   :depends-on (#:wordperfect-graphics #:wordperfect-graphics/png
-               #:wordperfect-graphics/raster #:fiveam)
+               #:wordperfect-graphics/raster #:wordperfect-graphics/fuzz #:fiveam)
   :serial t
   :components ((:module "tests"
                 :serial t
@@ -61,12 +61,19 @@
                              (:file "fixture-tests")
                              (:file "text-tests")
                              (:file "scene-tests")
+                             (:file "fuzz-tests")
                              (:static-file "data/imagemagick-input.wpg")
                              (:static-file "data/libreoffice-wpg1.wpg"))))
   :perform (asdf:test-op (op c)
              (declare (ignore op c))
              (unless (uiop:symbol-call :wordperfect-graphics/tests :run-tests)
                (error "wordperfect-graphics test suite failed"))))
+
+(asdf:defsystem #:wordperfect-graphics/fuzz
+  :description "Mutation fuzzing for wordperfect-graphics (make fuzz)."
+  :depends-on (#:wordperfect-graphics #:wordperfect-graphics/png
+               #:wordperfect-graphics/raster #:sb-md5)
+  :components ((:module "fuzz" :components ((:file "fuzz")))))
 
 (asdf:defsystem #:wordperfect-graphics/cli
   :description "The `wpg' command: inspect WPG files, extract bitmaps, convert to SVG."

@@ -45,12 +45,18 @@ next-sector entries). LIMIT bounds its length, against loops."
                                    :end2 (min (+ start sector-size) (length octets)))))
     out))
 
+(defun truncated-to (size octets)
+  "The first SIZE octets of OCTETS, or all of them if there are fewer: a
+damaged directory can claim more than the stream's sectors hold."
+  (subseq octets 0 (min size (length octets))))
+
 (defun ole-stream (octets name)
   "The contents of the stream NAME (compared without regard to case) in
 the OLE2 compound document OCTETS, or NIL if there is no such stream."
   (let* ((sector-size (ash 1 (ole-u16 octets #x1e)))
          (mini-size (ash 1 (ole-u16 octets #x20)))
-         (fat-count (ole-u32 octets #x2c))
+         (fat-count (min (ole-u32 octets #x2c) ; no more than the file can hold
+                         (1+ (floor (length octets) 512))))
          (dir-start (ole-u32 octets #x30))
          (mini-cutoff (ole-u32 octets #x38))
          (minifat-start (ole-u32 octets #x3c))
@@ -89,7 +95,8 @@ the OLE2 compound document OCTETS, or NIL if there is no such stream."
               do (multiple-value-bind (entry-name type start size) (entry i)
                    (when (and (= type 2) (string-equal entry-name name))
                      (return
-                       (subseq
+                       (truncated-to
+                        size
                         (if (< size mini-cutoff)
                             ;; Small streams live in the mini stream, which is
                             ;; the root entry's data, in 64-byte mini sectors.
@@ -112,5 +119,4 @@ the OLE2 compound document OCTETS, or NIL if there is no such stream."
                                                   :start2 (min (* s mini-size) (length mini-stream))
                                                   :end2 (min (* (1+ s) mini-size) (length mini-stream))))
                                 out))
-                            (ole-read-chain octets (ole-chain fat start max-sectors) sector-size))
-                        0 size)))))))))
+                            (ole-read-chain octets (ole-chain fat start max-sectors) sector-size)))))))))))

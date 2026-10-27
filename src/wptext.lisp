@@ -16,6 +16,10 @@
   #(4 5 3 3 3 3 4 4 4 5 5 6 6 8 8)
   "Total sizes of the WP6 fixed-length codes #xF0-#xFE.")
 
+(defun octet-at (octets i)
+  "Octet I of OCTETS, or 0 past the end."
+  (if (< i (length octets)) (aref octets i) 0))
+
 (defun octet-u16 (octets i)
   (if (< (1+ i) (length octets))
       (logior (aref octets i) (ash (aref octets (1+ i)) 8))
@@ -87,13 +91,13 @@ A new run starts wherever the size, color or typeface changes."
              (variable-group (start code)
                ;; code, subgroup, size (whole group), flags, [prefix ids],
                ;; non-deletable size, data ..., size, code
-               (let* ((subgroup (aref octets (+ start 1)))
+               (let* ((subgroup (octet-at octets (+ start 1)))
                       (total (octet-u16 octets (+ start 2)))
-                      (flags (if (< (+ start 4) (length octets)) (aref octets (+ start 4)) 0))
+                      (flags (octet-at octets (+ start 4)))
                       (data (+ start 5))
                       (end (min (length octets) (+ start (max total 1)))))
                  (when (logbitp 7 flags)
-                   (incf data (+ 1 (* 2 (if (< data (length octets)) (aref octets data) 0)))))
+                   (incf data (+ 1 (* 2 (octet-at octets data)))))
                  (incf data 2)          ; non-deletable size
                  (when (and (= code #xd4) (< data end))
                    (case subgroup

@@ -12,6 +12,7 @@ Dependencies are vendored with [ocicl](https://github.com/ocicl/ocicl):
 ocicl install          # fetch what ocicl.csv lists into ocicl/
 make                   # build bin/wpg
 make test              # run the FiveAM suite
+make fuzz              # mutation-fuzz the library (see Tests)
 make clean             # remove bin/ and this tree's fasl cache
 ```
 
@@ -29,6 +30,7 @@ The Makefile uses a hermetic source registry (this tree only). From your own REP
 | `wordperfect-graphics/png` | `write-bitmap-png`, `bitmap-png-octets` | zpng |
 | `wordperfect-graphics/raster` | `render-scene`, `render-png`: whole drawings to pixels | cl-vectors, zpb-ttf |
 | `wordperfect-graphics/tests` | FiveAM suite | fiveam |
+| `wordperfect-graphics/fuzz` | the mutation fuzzer behind `make fuzz` | nothing more |
 | `wordperfect-graphics/cli` | the `wpg` program | clingon |
 
 ## Command line
@@ -180,4 +182,17 @@ These follow the most plausible reading but are unconfirmed:
 
 ## Tests
 
-`make test` runs about 360 checks. Most use WPG files built byte by byte in `tests/builder.lisp`, including OLE2 containers. Two real files from other projects' test suites live in `tests/data/`; see `tests/data/NOTICE` for their sources and licenses.
+`make test` runs about 370 checks. Most use WPG files built byte by byte in `tests/builder.lisp`, including OLE2 containers. Two real files from other projects' test suites live in `tests/data/`; see `tests/data/NOTICE` for their sources and licenses.
+
+### Fuzzing
+
+`make fuzz` damages copies of WPG files at random and runs each through everything the library does with a file: `read-wpg` (lenient and strict), `build-scene`, SVG output with its PNG bitmaps, and the rasterizer. Damaged input may be refused, but only with a `wpg-error`. Any other error, a timeout, running out of memory or stack, or a lenient read that hides a non-WPG error in a record counts as a failure. The fuzzer lowers `*max-bitmap-bytes*` to 16 MB, so a header claiming a huge bitmap is refused rather than slow. Most mutations land inside record bodies, located by reading the seed file first; others damage record headers, or drop, duplicate or splice whole records between files.
+
+```sh
+make fuzz                                            # 5,000 inputs from tests/data/
+make fuzz FUZZ_CORPUS=~/clipart FUZZ_ITERATIONS=200000 FUZZ_SEED=7
+```
+
+`FUZZ_CORPUS` is a colon-separated list of files and directories, searched recursively. Each distinct failure is shrunk and saved to `fuzz-crashes/` (`FUZZ_OUTPUT`) as a `.wpg` file, with a `.txt` file holding the condition and backtrace. The input being checked is kept in `fuzz-crashes/current.wpg`, so a crash that takes the Lisp down leaves its input behind. A run with the same seed and corpus repeats exactly.
+
+Once a failure is fixed, it gets a test in `tests/fuzz-tests.lisp`. A crash file derived from a freely licensed seed can go in `tests/data/fuzz/`, where `make test` checks it (note its origin in `tests/data/NOTICE`); one derived from clip art or other files that can't be redistributed is rebuilt as a small synthetic test instead. `make test` also runs a short fuzz with a fixed seed.

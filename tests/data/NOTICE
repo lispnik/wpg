@@ -11,3 +11,9 @@ libreoffice-wpg1.wpg
   https://github.com/LibreOffice/core
   Licensed under the Mozilla Public License 2.0, https://mozilla.org/MPL/2.0/
   SHA-1 2bc5112349434e94d9b9bf65abb62448d5c1ccb4
+
+fuzz/raster-offcanvas-hang.wpg
+fuzz/raster-huge-stroke.wpg
+  Damaged copies of libreoffice-wpg1.wpg (above) that the fuzzer found
+  (see README, Fuzzing): a few bytes changed. As modified versions of an
+  MPL 2.0 file, they remain under the Mozilla Public License 2.0.
